@@ -1,0 +1,113 @@
+package lcs;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVector;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.composite.DFEVectorType;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+
+public class LCSKernel extends Kernel {
+
+
+	public LCSKernel(KernelParameters parameters, int fmemLen, int vectorSize) {
+		super(parameters);
+		DFEVectorType<DFEVar> inType = new DFEVectorType<DFEVar>(dfeUInt(8), vectorSize);
+		DFEType fmemType = dfeUInt(8);
+		DFEType outType = dfeUInt(8);
+
+		// loop offset
+		OffsetExpr loopLength = stream.makeOffsetAutoLoop("loopLength");
+		DFEVar loopLengthVal = loopLength.getDFEVar(this, dfeUInt(32));
+
+		final int addrBits = MathUtils.bitsToAddress(fmemLen);
+		final DFEType addrType = dfeUInt(addrBits);
+
+
+
+		DFEVar xlen = io.scalarInput("xlen", addrType);
+		DFEVar ylen = io.scalarInput("ylen", addrType);
+
+		CounterChain chain = control.count.makeCounterChain();
+		DFEVar i = chain.addCounter(xlen, vectorSize);
+		DFEVar j = chain.addCounter(ylen, 1);
+		DFEVar k = chain.addCounter(loopLengthVal, 1);
+
+
+		DFEVector<DFEVar> x = io.input("x", inType, j === 0 & k === 0);
+
+		DFEVar y = mem.romMapped("y", j, fmemType, fmemLen);
+		y.simWatch("y");
+		DFEVector<DFEVar> eq = x === y;
+		eq.simWatch("eq");
+
+		Memory<DFEVar> ram = mem.alloc(fmemType, fmemLen);
+		DFEVar l = ram.read(j);
+		l.simWatch("l");
+		DFEVar lp = j === 0 ? 0 : stream.offset(l, -loopLength);
+		lp.simWatch("lp");
+
+		DFEVector<DFEVar> zp = inType.newInstance(this);
+
+		DFEVector<DFEVar> ze = inType.newInstance(this);
+		ze[0] <== eq[0] === 1 ? lp+1: l>=zp[0]? l: zp[0];
+		for (int n = 1; n < vectorSize; n++)   //initialize the vector ze
+			ze[n] <== eq[n] ===1 ? zp[n-1]+1:zp[n];
+
+		// cumulative max - network version
+		int depth = MathUtils.bitsToAddressPowerOfTwo(vectorSize);
+		DFEVar cmps[][] = new DFEVar[depth][vectorSize/2];
+		for(int n = 0; n < depth; n++) {
+			int pow2_n = (int)Math.pow(2, n);
+			int pow2_n1 = (int)Math.pow(2, n-1);
+			for (int m = 0; m < (vectorSize+1)/2; m++) {
+				cmps[n][m] = outType.newInstance(this);
+				if(n == 0){	// the first line connects directly to ze
+					cmps[n][m] <== ze[2*m]>ze[2*m+1] ? ze[2*m] : ze[2*m+1];
+				}
+				else{   //
+					int offset = (m/pow2_n)*pow2_n;
+					int lI = n-1;
+					int lJ = (pow2_n1-1)+ offset;
+					DFEVar left = cmps[lI][lJ];
+					int remaining = m-offset;
+					DFEVar right;
+					if(remaining == 0)
+						right = ze[2*offset+pow2_n];
+					 else {
+						int rI = MathUtils.floorLog2(remaining);
+						int rJ = pow2_n1-(int)Math.pow(2, rI)+offset+remaining;
+						right = cmps[rI][rJ];
+					}
+					cmps[n][m] <== left>right ? left: right;
+				}
+			}
+		}
+		//connect the correct outputs
+		DFEVector<DFEVar> z = inType.newInstance(this);
+		z[0] <== ze[0];
+		for (int n = 1; n < vectorSize; n++) {
+			int iDepth = MathUtils.bitsToRepresent(n)-1;
+			int iOffset = n-(int)Math.pow(2, iDepth);
+			System.out.println("Out vector init: "+n+"->"+iDepth+","+iOffset);
+			z[n] <== cmps[iDepth][iOffset];
+		}
+
+		zp <== j===0? constant.vect(vectorSize,0):stream.offset(z, -loopLength);
+
+		//write to RAM with a delay
+		DFEVector<DFEVar> zz = i===0 &j ===0 ?constant.vect(vectorSize,0):stream.offset(z, -loopLength);
+		DFEVar writeAddr = j>=1? j-1: ylen-1;
+		ram.write(writeAddr, zz[vectorSize-1], k === 0);
+
+		io.output("z", z[vectorSize-1], outType, k === loopLengthVal -1 & i === xlen-vectorSize);
+
+	}
+
+
+}

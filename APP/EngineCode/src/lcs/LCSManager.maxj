@@ -1,0 +1,43 @@
+package lcs;
+
+import com.maxeler.maxcompiler.v2.build.EngineParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.CPUTypes;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.InterfaceParam;
+import com.maxeler.maxcompiler.v2.managers.standard.Manager;
+import com.maxeler.maxcompiler.v2.managers.standard.Manager.IOType;
+
+
+public class LCSManager {
+
+	static final String KERNEL_NAME = "LCSKernel";
+	static final int FMEM_SIZE = 1024;
+	static final int VECTOR_SIZE = 16;
+
+	private static EngineInterface interfaceDefault() {
+		EngineInterface ei = new EngineInterface();
+		InterfaceParam xlen = ei.addParam("xlen", CPUTypes.UINT32);
+		InterfaceParam ylen = ei.addParam("ylen", CPUTypes.UINT32);
+		InterfaceParam loopLength = ei.getAutoLoopOffset(KERNEL_NAME, "loopLength");
+
+		ei.setScalar(KERNEL_NAME, "xlen", xlen);
+		ei.setScalar(KERNEL_NAME, "ylen", ylen);
+
+		ei.ignoreAutoLoopOffset(KERNEL_NAME, "loopLength");
+		ei.setTicks(KERNEL_NAME, xlen/VECTOR_SIZE * ylen * loopLength);
+		ei.setStream("x", CPUTypes.UINT8, xlen * CPUTypes.UINT8.sizeInBytes());
+		ei.setStream("z", CPUTypes.UINT8, ylen * CPUTypes.UINT8.sizeInBytes());
+		return ei;
+	}
+
+	public static void main(String[] args) {
+		Manager manager = new Manager(new EngineParameters(args));
+		Kernel kernel = new LCSKernel(manager.makeKernelParameters(), FMEM_SIZE, VECTOR_SIZE);
+
+		manager.setKernel(kernel);
+		manager.setIO(IOType.ALL_CPU);
+		manager.createSLiCinterface(interfaceDefault());
+		manager.build();
+	}
+}
