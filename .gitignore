@@ -1,3 +1,20 @@
+.DS_Store
+
+*.class
+*.log
+
+# bin directory in EngineCode
+bin
+
+# RunRules
+.maxcompiler-activity.be
+binaries
+dist
+maxfiles
+objects
+
+# The following was generate by github - C
+
 # Object files
 *.o
 *.ko
